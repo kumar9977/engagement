@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Engagement Assistant</title>
+    <style>
+      :root{
+        color-scheme: light dark;
+        --bg:#fff; --panel:#f6f7f9; --ink:#111827; --muted:#6b7280; --line:#e5e7eb;
+        --accent:#4f46e5; --accent-weak:rgba(79,70,229,.10);
+        --ok:#15803d; --okbg:#dcfce7; --warn:#b45309; --warnbg:#fef3c7; --bad:#b91c1c; --badbg:#fee2e2;
+        --radius:12px; --font:"Segoe UI",-apple-system,system-ui,sans-serif;
+      }
+      @media (prefers-color-scheme: dark){
+        :root{
+          --bg:#14181d; --panel:#1e242b; --ink:#e8edf2; --muted:#93a1b2; --line:#2a323d;
+          --accent:#8b93ff; --accent-weak:rgba(139,147,255,.16);
+          --ok:#4ade80; --okbg:#16351f; --warn:#fbbf24; --warnbg:#3a2e12; --bad:#f87171; --badbg:#3a1618;
+        }
+      }
+      *{box-sizing:border-box}
+      [hidden]{display:none !important}
+      body{width:340px;margin:0;padding:16px;background:var(--bg);color:var(--ink);font:13px/1.5 var(--font)}
+      .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+      .title{display:flex;align-items:center;gap:9px}
+      .logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#4f46e5,#7c3aed);display:grid;place-items:center;color:#fff}
+      .logo svg{width:16px;height:16px}
+      .title h1{font-size:14px;margin:0;font-weight:700;letter-spacing:-.01em}
+      .dot{width:8px;height:8px;border-radius:50%;background:#9ca3af}
+      .dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)}
+
+      .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+      .muted{color:var(--muted)}
+      .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+
+      .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700}
+      .b-ok{background:var(--okbg);color:var(--ok)} .b-warn{background:var(--warnbg);color:var(--warn)} .b-bad{background:var(--badbg);color:var(--bad)}
+
+      .total{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:1}
+      .pills span{display:inline-block;background:var(--accent-weak);color:var(--accent);border-radius:999px;padding:2px 9px;margin:6px 4px 0 0;font-size:11px;font-weight:600}
+
+      button{width:100%;padding:10px;border:none;border-radius:9px;background:var(--accent);color:#fff;font:600 13px var(--font);cursor:pointer}
+      button:hover{filter:brightness(1.06)} button:disabled{opacity:.6;cursor:default}
+      button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+      button.ghost:hover{border-color:var(--accent);filter:none}
+      .pay{background:linear-gradient(135deg,#4f46e5,#7c3aed)}
+      input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--ink);font:inherit}
+      input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+      .msg{font-size:12px;font-weight:600;min-height:15px;margin-top:8px}
+      .msg.ok{color:var(--ok)} .msg.err{color:var(--bad)}
+      .price{font-size:22px;font-weight:800} .price small{font-size:12px;font-weight:600;color:var(--muted)}
+
+      details.day{margin:6px 0}
+      details.day>summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border-radius:9px;background:var(--bg);border:1px solid var(--line)}
+      details.day>summary::-webkit-details-marker{display:none}
+      details.day>summary .count{background:var(--accent);color:#fff;border-radius:999px;padding:0 8px;font-size:11px;font-weight:700;min-width:18px;text-align:center}
+      .dayComments{margin:6px 0 2px;padding-left:14px;max-height:160px;overflow:auto}
+      .dayComments li{margin:6px 0}
+      .dayComments .meta{font-size:11px;display:block}
+      h3.sec{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:0 0 8px;font-weight:700}
+      .foot{font-size:11px;color:var(--muted);margin:12px 0 0}
+      a{color:var(--accent)}
+    </style>
+  </head>
+  <body>
+    <div class="head">
+      <div class="title">
+        <span class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2z"/></svg></span>
+        <h1>Engagement Assistant</h1>
+      </div>
+      <span id="dot" class="dot" title=""></span>
+    </div>
+
+    <!-- Lapsed subscription warning (drafting failures etc.) -->
+    <div id="warnCard" class="card" style="border-color:var(--bad)" hidden>
+      <div id="warnMsg" class="muted"></div>
+      <button id="clearWarn" class="ghost" style="margin-top:10px">Dismiss</button>
+    </div>
+
+    <!-- SUBSCRIBE / ACTIVATE (shown when not active) -->
+    <section id="gate" hidden>
+      <div class="card">
+        <div class="row">
+          <h3 class="sec" style="margin:0">Subscription</h3>
+          <span id="gateBadge" class="badge b-bad">Inactive</span>
+        </div>
+        <div style="margin:10px 0 4px"><span class="price">₹790</span> <small class="muted">/ month</small></div>
+        <p class="muted" style="margin:0 0 12px">Unlimited AI-drafted comments for LinkedIn &amp; Instagram.</p>
+        <button id="subscribe" class="pay">Subscribe — ₹790/month</button>
+      </div>
+      <div class="card">
+        <h3 class="sec">Already paid?</h3>
+        <p class="muted" style="margin:0 0 9px">Enter the email you paid with to activate.</p>
+        <input id="activateEmail" type="email" placeholder="you@example.com" autocomplete="email" />
+        <button id="activate" class="ghost" style="margin-top:9px">Activate</button>
+        <div id="activateMsg" class="msg"></div>
+      </div>
+    </section>
+
+    <!-- DASHBOARD (shown when active) -->
+    <section id="dash" hidden>
+      <div class="card">
+        <div class="row">
+          <div>
+            <div class="total" id="total">0</div>
+            <div class="muted">comments posted today</div>
+          </div>
+          <span id="subBadge" class="badge b-ok">Active</span>
+        </div>
+        <div class="pills" id="byPlatform"></div>
+        <div class="pills" id="byCategory"></div>
+        <div class="muted" id="renewLine" style="margin-top:10px;font-size:12px"></div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="margin-bottom:6px">
+          <h3 class="sec" style="margin:0">Comments per day</h3>
+          <span class="muted" id="dailyTotal" style="font-size:11px"></span>
+        </div>
+        <div id="dailyList"><div class="muted">Loading…</div></div>
+      </div>
+    </section>
+
+    <button id="openOptions" class="ghost">Settings &amp; onboarding</button>
+    <p class="foot">Drafts are placed in the comment box for you to review. You always click Post yourself.</p>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

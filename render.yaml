@@ -29,3 +29,12 @@ services:
         value: 30d
       - key: ALLOWED_ORIGINS
         value: "*"           # tighten later; the extension origin is chrome-extension://<id>
+      # --- Payments (Razorpay) + Admin ---
+      - key: PAYMENT_URL
+        value: https://rzp.io/rzp/sim9G4s
+      - key: SUBSCRIPTION_AMOUNT
+        value: "790"
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false          # paste in the Render dashboard; MUST match the Razorpay webhook Secret
+      - key: ADMIN_PASSWORD
+        sync: false          # paste in the Render dashboard; login for /admin

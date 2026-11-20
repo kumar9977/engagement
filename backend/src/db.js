@@ -70,11 +70,22 @@ addColumnIfMissing('engagement_log', 'platform', "TEXT NOT NULL DEFAULT 'linkedi
 addColumnIfMissing('settings', 'platforms', `TEXT NOT NULL DEFAULT '["linkedin","instagram"]'`);
 addColumnIfMissing('settings', 'email_reports', 'INTEGER NOT NULL DEFAULT 0');
 
+// Subscription / billing fields (Razorpay). Added to users so activation can be
+// keyed to the email the customer paid with.
+addColumnIfMissing('users', 'subscription_status', 'TEXT');          // 'active' | 'cancelled' | 'expired' | NULL (manual/comp)
+addColumnIfMissing('users', 'subscription_start', 'TEXT');           // ISO; first time they paid
+addColumnIfMissing('users', 'current_period_end', 'TEXT');           // ISO; access valid until this moment
+addColumnIfMissing('users', 'last_payment_at', 'TEXT');              // ISO
+addColumnIfMissing('users', 'last_payment_id', 'TEXT');              // Razorpay payment id
+addColumnIfMissing('users', 'subscription_id', 'TEXT');              // Razorpay subscription id (if recurring)
+addColumnIfMissing('users', 'amount', 'INTEGER');                    // last amount in rupees
+addColumnIfMissing('users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0');
+
 // --- Helpers ---------------------------------------------------------------
 
 export function getOrCreateUser({ email = null, linkedinUrl = null } = {}) {
   if (email) {
-    const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const existing = db.prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE').get(email);
     if (existing) return existing;
   }
   const info = db
@@ -82,6 +93,102 @@ export function getOrCreateUser({ email = null, linkedinUrl = null } = {}) {
     .run(email, linkedinUrl);
   ensureSettings(info.lastInsertRowid);
   return db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+}
+
+export function getUserByEmail(email) {
+  if (!email) return null;
+  return db.prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE').get(email) || null;
+}
+
+// Derives whether a user currently has access.
+//   - A user who never paid (no subscription_start) is treated as a manual /
+//     comp account and is always allowed (grandfathered).
+//   - A paid user has access while current_period_end is in the future, even if
+//     their subscription is cancelled (they keep what they paid for).
+export function subscriptionState(user) {
+  if (!user) return { active: false, manual: false, status: null };
+  if (!user.subscription_start) {
+    return { active: true, manual: true, status: 'manual' };
+  }
+  const end = user.current_period_end ? Date.parse(user.current_period_end) : NaN;
+  const inDate = Number.isFinite(end) && end > Date.now();
+  const active = inDate && user.subscription_status !== 'revoked' && user.subscription_status !== 'expired';
+  return {
+    active,
+    manual: false,
+    status: user.subscription_status || 'pending',
+    start: user.subscription_start,
+    currentPeriodEnd: user.current_period_end,
+    amount: user.amount,
+  };
+}
+
+// Records a successful payment: creates/links the user by email and extends the
+// access window. Called from the Razorpay webhook. `currentPeriodEnd` (ISO),
+// when provided by Razorpay, wins; otherwise we extend by `periodDays`.
+export function recordPayment({
+  email,
+  amount = null,
+  paymentId = null,
+  subscriptionId = null,
+  periodDays = 31,
+  currentPeriodEnd = null,
+  linkedinUrl = null,
+}) {
+  const user = getOrCreateUser({ email, linkedinUrl });
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  let endIso = currentPeriodEnd;
+  if (!endIso) {
+    // Extend from the later of "now" and any remaining paid time (early renew).
+    const existingEnd = user.current_period_end ? Date.parse(user.current_period_end) : NaN;
+    const base = Number.isFinite(existingEnd) && existingEnd > now.getTime()
+      ? new Date(existingEnd)
+      : now;
+    endIso = new Date(base.getTime() + periodDays * 86400000).toISOString();
+  }
+
+  db.prepare(
+    `UPDATE users SET
+       subscription_status = 'active',
+       subscription_start = COALESCE(subscription_start, ?),
+       current_period_end = ?,
+       last_payment_at = ?,
+       last_payment_id = COALESCE(?, last_payment_id),
+       subscription_id = COALESCE(?, subscription_id),
+       amount = COALESCE(?, amount)
+     WHERE id = ?`
+  ).run(nowIso, endIso, nowIso, paymentId, subscriptionId, amount, user.id);
+
+  ensureSettings(user.id);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+}
+
+// Marks a subscription cancelled/expired without immediately cutting access.
+export function markSubscription(email, status) {
+  const user = getUserByEmail(email);
+  if (!user) return null;
+  db.prepare('UPDATE users SET subscription_status = ? WHERE id = ?').run(status, user.id);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+}
+
+// Rows for the admin dashboard: one per user, with subscription + usage.
+export function listUsersForAdmin() {
+  const rows = db
+    .prepare(
+      `SELECT u.id, u.email, u.linkedin_url, u.created_at,
+              u.subscription_status, u.subscription_start, u.current_period_end,
+              u.last_payment_at, u.amount, u.subscription_id,
+              (SELECT COUNT(*) FROM engagement_log e
+                 WHERE e.user_id = u.id AND e.status = 'posted') AS posted_count,
+              (SELECT MAX(created_at) FROM engagement_log e
+                 WHERE e.user_id = u.id AND e.status = 'posted') AS last_posted_at
+         FROM users u
+        ORDER BY u.id DESC`
+    )
+    .all();
+  return rows.map((r) => ({ ...r, state: subscriptionState(r) }));
 }
 
 export function ensureSettings(userId) {

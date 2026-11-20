@@ -2,7 +2,7 @@
 // token on every request. Minimal but real.
 
 import jwt from 'jsonwebtoken';
-import { db, getOrCreateUser } from './db.js';
+import { db, getOrCreateUser, getUserByEmail, subscriptionState } from './db.js';
 
 function secret() {
   const s = process.env.JWT_SECRET;
@@ -17,6 +17,38 @@ export function issueToken(user) {
   return jwt.sign({ uid: user.id }, secret(), {
     expiresIn: process.env.JWT_EXPIRES_IN || '30d',
   });
+}
+
+export function issueAdminToken() {
+  return jwt.sign({ role: 'admin' }, secret(), { expiresIn: '12h' });
+}
+
+// Activate by email: the customer paid on Razorpay with this email, and the
+// webhook created/updated their account. Returns { token, user } when they have
+// an active subscription (or a grandfathered manual account), else throws.
+export function activateByEmail({ email, linkedinUrl = null }) {
+  const clean = (email || '').trim().toLowerCase();
+  if (!clean || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) {
+    throw Object.assign(new Error('Enter the email address you paid with'), { status: 400 });
+  }
+  const user = getUserByEmail(clean);
+  if (!user) {
+    throw Object.assign(
+      new Error('No subscription found for this email. If you just paid, wait a minute and try again, or make sure you used this email at checkout.'),
+      { status: 404 }
+    );
+  }
+  const state = subscriptionState(user);
+  if (!state.active) {
+    throw Object.assign(
+      new Error('Your subscription is not active. Please subscribe to continue.'),
+      { status: 403 }
+    );
+  }
+  if (linkedinUrl && !user.linkedin_url) {
+    db.prepare('UPDATE users SET linkedin_url = ? WHERE id = ?').run(linkedinUrl, user.id);
+  }
+  return { token: issueToken(user), user };
 }
 
 // Validates a license key, creates/links a user, returns { token, user }.
@@ -45,8 +77,10 @@ export function checkLicense({ key, email = null, linkedinUrl = null }) {
   return { token: issueToken(user), user };
 }
 
-// Express middleware: requires a valid Bearer token, attaches req.userId.
-export function requireAuth(req, res, next) {
+// Verifies the Bearer token and loads the user. Does NOT check subscription.
+// Attaches req.userId and req.user. Used by status endpoints (/me) that must
+// stay readable even when a subscription has lapsed.
+export function requireAuthToken(req, res, next) {
   const header = req.get('authorization') || '';
   const m = header.match(/^Bearer\s+(.+)$/i);
   if (!m) return res.status(401).json({ error: 'Missing bearer token' });
@@ -55,11 +89,42 @@ export function requireAuth(req, res, next) {
     // The token may reference a user that no longer exists (e.g. the DB was
     // reset). Return 401 so the client can transparently re-authenticate,
     // instead of letting a later insert fail with a foreign-key error.
-    const user = db.prepare('SELECT id FROM users WHERE id = ?').get(payload.uid);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.uid);
     if (!user) return res.status(401).json({ error: 'Session expired, please reconnect' });
     req.userId = payload.uid;
+    req.user = user;
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// Full gate: valid token AND an active subscription (manual accounts pass).
+// Returns 402 Payment Required when the subscription has lapsed so the client
+// can prompt the user to subscribe again.
+export function requireAuth(req, res, next) {
+  requireAuthToken(req, res, () => {
+    const state = subscriptionState(req.user);
+    if (!state.active) {
+      return res.status(402).json({
+        error: 'Your subscription has expired. Please renew to keep using the assistant.',
+        subscription: state,
+      });
+    }
+    next();
+  });
+}
+
+// Admin gate: a valid admin token (from POST /api/admin/login).
+export function requireAdmin(req, res, next) {
+  const header = req.get('authorization') || '';
+  const m = header.match(/^Bearer\s+(.+)$/i);
+  if (!m) return res.status(401).json({ error: 'Admin login required' });
+  try {
+    const payload = jwt.verify(m[1], secret());
+    if (payload.role !== 'admin') return res.status(403).json({ error: 'Not an admin token' });
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired admin session' });
   }
 }

@@ -11,8 +11,15 @@ import settingsRoutes from './routes/settings.js';
 import draftRoutes from './routes/draft.js';
 import engagementRoutes from './routes/engagement.js';
 import reportRoutes from './routes/reports.js';
+import webhookRoutes from './routes/webhook.js';
+import adminRoutes from './routes/admin.js';
 
 const app = express();
+
+// The Razorpay webhook signature is computed over the RAW request body, so this
+// route must see the raw bytes — mount it before express.json().
+app.use('/api/webhook/razorpay', express.raw({ type: '*/*', limit: '1mb' }));
+
 app.use(express.json({ limit: '6mb' })); // room for captured video frames (base64 images)
 
 const origins = (process.env.ALLOWED_ORIGINS || '*')
@@ -28,11 +35,13 @@ app.use(
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
+app.use('/api', webhookRoutes); // POST /api/webhook/razorpay (raw body parsed above)
 app.use('/api', licenseRoutes);
 app.use('/api', settingsRoutes);
 app.use('/api', draftRoutes);
 app.use('/api', engagementRoutes);
 app.use('/api', reportRoutes);
+app.use(adminRoutes); // GET /admin, POST /api/admin/login, GET /api/admin/users
 
 // Central error handler: never leak a stack to the client, never crash.
 app.use((err, _req, res, _next) => {

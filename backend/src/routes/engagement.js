@@ -124,4 +124,47 @@ router.get('/session-summary', requireAuth, (req, res, next) => {
   }
 });
 
+// GET /api/daily-summary?days=7  -> per-day count of posted comments plus the
+// comments themselves, newest day first. Defaults to the last 7 days.
+router.get('/daily-summary', requireAuth, (req, res, next) => {
+  try {
+    let days = parseInt(req.query.days, 10);
+    if (!Number.isFinite(days) || days < 1) days = 7;
+    if (days > 90) days = 90;
+
+    const rows = db
+      .prepare(
+        `SELECT id, post_url, surface, category, platform, comment, created_at,
+                date(created_at) AS day
+           FROM engagement_log
+          WHERE user_id = ?
+            AND status = 'posted'
+            AND date(created_at) >= date('now', ?)
+          ORDER BY id DESC`
+      )
+      .all(req.userId, `-${days - 1} days`);
+
+    const byDay = new Map();
+    for (const r of rows) {
+      if (!byDay.has(r.day)) byDay.set(r.day, { date: r.day, count: 0, comments: [] });
+      const entry = byDay.get(r.day);
+      entry.count += 1;
+      entry.comments.push({
+        id: r.id,
+        comment: r.comment,
+        surface: r.surface,
+        category: r.category,
+        platform: r.platform,
+        post_url: r.post_url,
+        created_at: r.created_at,
+      });
+    }
+
+    const daily = [...byDay.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
+    res.json({ days, total: rows.length, daily });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
