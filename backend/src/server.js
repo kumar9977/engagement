@@ -14,6 +14,13 @@ import reportRoutes from './routes/reports.js';
 import webhookRoutes from './routes/webhook.js';
 import adminRoutes from './routes/admin.js';
 
+const APP_VERSION = '1.2.0';
+
+// Don't let a single stray async error take the whole server (and therefore
+// every user) down. Log and keep serving instead of crashing.
+process.on('unhandledRejection', (reason) => console.error('[unhandledRejection]', reason));
+process.on('uncaughtException', (err) => console.error('[uncaughtException]', err));
+
 const app = express();
 
 // The Razorpay webhook signature is computed over the RAW request body, so this
@@ -33,7 +40,7 @@ app.use(
   })
 );
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now(), version: APP_VERSION }));
 
 app.use('/api', webhookRoutes); // POST /api/webhook/razorpay (raw body parsed above)
 app.use('/api', licenseRoutes);

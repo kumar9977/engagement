@@ -377,8 +377,8 @@
         try { media.images = await collectCarousel(postEl, media.images); } catch { /* ignore */ }
       } else if (media.type === 'video') {
         try {
-          const frames = await captureVideoFrames(postEl, 3, 500);
-          if (frames.length) media.images = [...frames, ...media.images].slice(0, 5);
+          const frames = await captureVideoFrames(postEl, 2, 500);
+          if (frames.length) media.images = [...frames, ...media.images].slice(0, 3);
         } catch { /* ignore */ }
       }
 
