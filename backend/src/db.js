@@ -3,19 +3,40 @@
 // (No warm-up / pacing / auto-post state is stored, by design: the user posts
 //  every comment themselves, so there is no scheduler state to persist.)
 
-import Database from 'better-sqlite3';
+import Database from 'libsql';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const dbPath = resolve(__dirname, '..', process.env.DB_PATH || './data/app.db');
-mkdirSync(dirname(dbPath), { recursive: true });
+// Storage:
+//  - If TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set, use the Turso cloud
+//    database directly (remote mode). This is durable: it survives restarts and
+//    redeploys on hosts with an ephemeral filesystem (e.g. Render free), unlike
+//    a local file. Every query goes to Turso, so reads and writes are strongly
+//    consistent with no sync step.
+//  - Otherwise fall back to a local SQLite file (local dev / self-hosting).
+// libsql is a drop-in for better-sqlite3's synchronous API, so no other code
+// changes are needed.
+const TURSO_URL = process.env.TURSO_DATABASE_URL;
+const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN;
 
-export const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+export const db =
+  TURSO_URL && TURSO_TOKEN
+    ? new Database(TURSO_URL, { authToken: TURSO_TOKEN })
+    : (() => {
+        const dbPath = resolve(__dirname, '..', process.env.DB_PATH || './data/app.db');
+        mkdirSync(dirname(dbPath), { recursive: true });
+        const local = new Database(dbPath);
+        try { local.pragma('journal_mode = WAL'); } catch { /* ignore */ }
+        return local;
+      })();
+
+if (TURSO_URL && TURSO_TOKEN) console.log('[db] using Turso cloud database (durable)');
+else console.log('[db] using local SQLite file');
+
+try { db.pragma('foreign_keys = ON'); } catch { /* remote libsql manages this itself */ }
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (

@@ -12,7 +12,15 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
-        value: "20.18.0"   # better-sqlite3 has a prebuilt binary for Node 20 (Node 26 does not)
+        value: "20.18.0"   # libsql ships a prebuilt native binary for Node 20
+      # --- Durable database (Turso). When set, the app stores data in Turso
+      # cloud instead of the ephemeral local disk, so users/subscriptions/logs
+      # survive restarts and redeploys. Create a free DB at turso.tech, then
+      # paste the URL (libsql://...) and an auth token in the dashboard. ---
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
       - key: LLM_PROVIDER
         value: gemini
       - key: GEMINI_MODEL
