@@ -13,6 +13,7 @@ import engagementRoutes from './routes/engagement.js';
 import reportRoutes from './routes/reports.js';
 import webhookRoutes from './routes/webhook.js';
 import adminRoutes from './routes/admin.js';
+import legalRoutes from './routes/legal.js';
 
 const APP_VERSION = '1.2.0';
 
@@ -49,6 +50,7 @@ app.use('/api', draftRoutes);
 app.use('/api', engagementRoutes);
 app.use('/api', reportRoutes);
 app.use(adminRoutes); // GET /admin, POST /api/admin/login, GET /api/admin/users
+app.use(legalRoutes); // GET /privacy
 
 // Central error handler: never leak a stack to the client, never crash.
 app.use((err, _req, res, _next) => {
