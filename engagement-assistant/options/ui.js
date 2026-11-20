@@ -34,6 +34,7 @@
       if (on && title) title.textContent = b.dataset.title;
     });
     try { localStorage.setItem('ea-pane', name); } catch (e) {}
+    try { document.dispatchEvent(new CustomEvent('pane:show', { detail: name })); } catch (e) {}
   }
   items.forEach(function (b) { b.addEventListener('click', function () { show(b.dataset.pane); }); });
   var start = 'connection';

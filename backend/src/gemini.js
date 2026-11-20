@@ -41,41 +41,26 @@ async function buildImageParts(images) {
   return parts.filter(Boolean);
 }
 
-export async function draftComment({ settings, category, postText, postAuthor, platform, postType, images = [], avoid = [] }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw Object.assign(new Error('GEMINI_API_KEY is not set on the server'), { status: 500 });
-
-  const model = process.env.GEMINI_MODEL || 'gemini-flash-latest';
-  const maxTokens = Number(process.env.GEMINI_MAX_TOKENS || 800);
+// One Gemini call for a given model + (optional) image parts + timeout.
+// Throws an Error tagged { retryable, fatal } so the cascade can decide whether
+// to fall back to the next stage or give up.
+async function callGemini({ apiKey, model, systemText, userText, imageParts, timeoutMs, maxTokens }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
-  const imageParts = await buildImageParts(images);
-
-  const generationConfig = {
-    maxOutputTokens: maxTokens,
-    temperature: 0.9,
-    responseMimeType: 'text/plain',
-  };
-  // "thinking" control is only supported on some models and 400s on the fast
-  // "lite" models, so it is opt-in via GEMINI_THINKING=true (for thinking models
-  // where you want to cap the thinking budget).
+  const generationConfig = { maxOutputTokens: maxTokens, temperature: 0.9, responseMimeType: 'text/plain' };
   if (String(process.env.GEMINI_THINKING || 'false') === 'true') {
     generationConfig.thinkingConfig = { thinkingBudget: 0 };
   }
 
-  const userParts = [
-    { text: buildUserPrompt({ category, postText, postAuthor, platform, postType, hasImages: imageParts.length > 0 }) },
-    ...imageParts,
-  ];
   const body = {
-    systemInstruction: { parts: [{ text: buildSystemPrompt(settings, avoid) }] },
-    contents: [{ role: 'user', parts: userParts }],
+    systemInstruction: { parts: [{ text: systemText }] },
+    contents: [{ role: 'user', parts: [{ text: userText }, ...imageParts] }],
     generationConfig,
   };
 
-  // Retry transient upstream errors (rate limit / overloaded) with backoff.
-  const RETRYABLE = new Set([429, 503]);
-  const maxAttempts = Number(process.env.GEMINI_RETRIES || 3);
+  // Small in-stage retry for transient rate-limit / overload.
+  const RETRYABLE = new Set([429, 503, 500, 502, 504]);
+  const maxAttempts = Number(process.env.GEMINI_RETRIES || 2);
   let res;
   let lastDetail = '';
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -84,36 +69,95 @@ export async function draftComment({ settings, category, postText, postAuthor, p
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(Number(process.env.LLM_TIMEOUT_MS || 30000)),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
-      const message = error?.name === 'TimeoutError' ? 'Gemini request timed out' : 'Could not reach Gemini API';
-      throw Object.assign(new Error(message), { status: 502 });
+      // Timeout / network error -> retryable so the cascade drops to text-only.
+      const msg = error?.name === 'TimeoutError' ? 'timeout' : 'network error';
+      throw Object.assign(new Error(msg), { status: 502, retryable: true });
     }
 
     if (res.ok) break;
-
     lastDetail = await res.text().catch(() => '');
     if (RETRYABLE.has(res.status) && attempt < maxAttempts) {
-      await new Promise((r) => setTimeout(r, 400 * 2 ** (attempt - 1))); // 400ms, 800ms, ...
+      await new Promise((r) => setTimeout(r, 300 * 2 ** (attempt - 1)));
       continue;
     }
-    const hint = res.status === 503 ? ' (model busy, try again shortly)' : '';
-    // Keep the key out of any surfaced error text.
-    throw Object.assign(new Error(`Gemini API error ${res.status}${hint}: ${lastDetail.slice(0, 300)}`), { status: 502 });
+    // 401/403 = bad key: fatal (no point trying other stages). 400 = this model/
+    // request shape unhappy: not fatal, let the cascade try a different model.
+    const fatal = res.status === 401 || res.status === 403;
+    throw Object.assign(new Error(`Gemini ${res.status}: ${lastDetail.slice(0, 200)}`), {
+      status: 502,
+      retryable: !fatal,
+      fatal,
+    });
   }
 
   const data = await res.json();
   const candidate = data.candidates?.[0];
   if (candidate?.finishReason === 'SAFETY') {
-    throw Object.assign(new Error('Gemini blocked this draft on safety grounds. Try a different post or category.'), { status: 502 });
+    throw Object.assign(new Error('safety-blocked'), { status: 502, retryable: true });
   }
-  const text = (candidate?.content?.parts || [])
-    .map((p) => p.text || '')
-    .join('')
-    .trim();
-
+  const text = (candidate?.content?.parts || []).map((p) => p.text || '').join('').trim();
   const comment = sanitize(text);
-  if (!comment) throw Object.assign(new Error('Gemini returned an empty comment'), { status: 502 });
+  if (!comment) throw Object.assign(new Error('empty'), { status: 502, retryable: true });
   return comment;
+}
+
+// Public entry point. Tries, in order, until one succeeds:
+//   1. primary model WITH vision  (only when images were provided)
+//   2. primary model TEXT-ONLY    (dropping images -> far faster, rarely times out)
+//   3. fallback model TEXT-ONLY
+// This makes a slow/overloaded vision call degrade into a quick text draft
+// instead of surfacing a "timeout" to the user.
+export async function draftComment({ settings, category, postText, postAuthor, platform, postType, images = [], avoid = [] }) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw Object.assign(new Error('GEMINI_API_KEY is not set on the server'), { status: 500 });
+
+  const primaryModel = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.0-flash';
+  const maxTokens = Number(process.env.GEMINI_MAX_TOKENS || 800);
+  const visionTimeout = Number(process.env.LLM_TIMEOUT_MS || 45000);
+  const textTimeout = Number(process.env.GEMINI_FALLBACK_TIMEOUT_MS || 20000);
+
+  const systemText = buildSystemPrompt(settings, avoid);
+  const userText = (hasImages) =>
+    buildUserPrompt({ category, postText, postAuthor, platform, postType, hasImages });
+
+  // Only build (fetch/decode) image parts if there is text we can fall back to.
+  const hasUsableText = typeof postText === 'string' && postText.trim().length >= 10;
+  const imageParts = images.length ? await buildImageParts(images) : [];
+
+  const stages = [];
+  if (imageParts.length) {
+    // With-vision attempt. If there is no caption to fall back to, give vision
+    // the full timeout budget since it is the only way to understand the post.
+    stages.push({ model: primaryModel, parts: imageParts, timeoutMs: visionTimeout, hasImages: true });
+  }
+  if (hasUsableText || !imageParts.length) {
+    stages.push({ model: primaryModel, parts: [], timeoutMs: imageParts.length ? textTimeout : visionTimeout, hasImages: false });
+    if (fallbackModel !== primaryModel) {
+      stages.push({ model: fallbackModel, parts: [], timeoutMs: textTimeout, hasImages: false });
+    }
+  }
+
+  let lastErr;
+  for (const st of stages) {
+    try {
+      return await callGemini({
+        apiKey,
+        model: st.model,
+        systemText,
+        userText: userText(st.hasImages),
+        imageParts: st.parts,
+        timeoutMs: st.timeoutMs,
+        maxTokens,
+      });
+    } catch (err) {
+      lastErr = err;
+      if (err.fatal) break; // bad API key etc. — stop and surface
+      // otherwise fall through to the next (faster / text-only) stage
+    }
+  }
+  throw lastErr || Object.assign(new Error('Could not draft a comment'), { status: 502 });
 }

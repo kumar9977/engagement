@@ -17,10 +17,16 @@ services:
         value: gemini
       - key: GEMINI_MODEL
         value: gemini-3.5-flash-lite
+      - key: GEMINI_FALLBACK_MODEL     # text-only fallback if the primary is slow/busy
+        value: gemini-2.0-flash
       - key: GEMINI_MAX_TOKENS
         value: "400"
-      - key: LLM_TIMEOUT_MS
-        value: "60000"
+      - key: LLM_TIMEOUT_MS            # with-vision attempt budget
+        value: "45000"
+      - key: GEMINI_FALLBACK_TIMEOUT_MS # fast text-only attempts
+        value: "20000"
+      - key: KEEP_WARM                 # self-ping to avoid free-tier cold starts
+        value: "true"
       - key: GEMINI_API_KEY
         sync: false          # paste this in the Render dashboard (kept secret)
       - key: JWT_SECRET

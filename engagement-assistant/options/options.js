@@ -191,6 +191,84 @@ async function sendReportNow(event) {
 }
 
 const PLATFORM_LABEL = { linkedin: 'LinkedIn', instagram: 'Instagram' };
+const SURFACE_LABEL = { home: 'Home feed', search: 'Keyword search', profile: 'Target profiles', own_post: 'Your posts', explore: 'Explore', post: 'Posts' };
+const CATEGORY_LABEL = { question: 'Question', appreciation: 'Appreciation', relatable: 'Relatable', value_add: 'Value-add' };
+
+function dashDayLabel(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - d) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+let dashLoaded = false;
+async function loadDashboard(force = false) {
+  const { token } = await getConfig();
+  if (!token) {
+    $('dashDaily').innerHTML = '<p class="hint">Connect in the Connection tab to see your activity.</p>';
+    return;
+  }
+  if (dashLoaded && !force) return;
+
+  const [today, hist] = await Promise.all([
+    api('/session-summary'),
+    api('/daily-summary?days=90'),
+  ]);
+
+  if (today.ok) {
+    $('dashToday').textContent = today.data.total ?? 0;
+    const plat = $('dashPlatform'); plat.replaceChildren();
+    for (const [k, v] of Object.entries(today.data.byPlatform || {})) {
+      const s = document.createElement('span'); s.textContent = `${PLATFORM_LABEL[k] || k}: ${v}`; plat.appendChild(s);
+    }
+    const cat = $('dashCategory'); cat.replaceChildren();
+    for (const [k, v] of Object.entries(today.data.byCategory || {})) {
+      const s = document.createElement('span'); s.textContent = `${CATEGORY_LABEL[k] || k}: ${v}`; cat.appendChild(s);
+    }
+  }
+
+  const container = $('dashDaily');
+  container.replaceChildren();
+  if (!hist.ok) {
+    container.innerHTML = '<p class="hint">Could not load activity.</p>';
+    return;
+  }
+  const daily = hist.data.daily || [];
+  $('dashTotal').textContent = hist.data.total ?? 0;
+  // Week = sum of days within the last 7 calendar days.
+  const weekAgo = new Date(); weekAgo.setHours(0, 0, 0, 0); weekAgo.setDate(weekAgo.getDate() - 6);
+  $('dashWeek').textContent = daily
+    .filter((d) => new Date(`${d.date}T00:00:00`) >= weekAgo)
+    .reduce((n, d) => n + (d.count || 0), 0);
+
+  if (!daily.length) {
+    container.innerHTML = '<p class="hint">No comments posted yet.</p>';
+    return;
+  }
+  daily.forEach((day, i) => {
+    const det = document.createElement('details'); det.className = 'day'; if (i === 0) det.open = true;
+    const sum = document.createElement('summary');
+    const lbl = document.createElement('span'); lbl.textContent = dashDayLabel(day.date);
+    const cnt = document.createElement('span'); cnt.className = 'count'; cnt.textContent = String(day.count);
+    sum.append(lbl, cnt); det.appendChild(sum);
+    const ul = document.createElement('ul'); ul.className = 'day-comments';
+    for (const c of day.comments || []) {
+      const li = document.createElement('li');
+      const txt = document.createElement('div'); txt.textContent = c.comment; li.appendChild(txt);
+      const parts = [];
+      if (c.platform) parts.push(PLATFORM_LABEL[c.platform] || c.platform);
+      if (c.surface) parts.push(SURFACE_LABEL[c.surface] || c.surface);
+      if (c.category) parts.push(CATEGORY_LABEL[c.category] || c.category);
+      if (parts.length) { const m = document.createElement('span'); m.className = 'meta'; m.textContent = parts.join(' · '); li.appendChild(m); }
+      ul.appendChild(li);
+    }
+    det.appendChild(ul); container.appendChild(det);
+  });
+  dashLoaded = true;
+}
 
 function safePostUrl(rawUrl) {
   try {
@@ -314,6 +392,9 @@ async function loadQueue() {
 $('subscribe').addEventListener('click', subscribe);
 $('activate').addEventListener('click', activate);
 $('connect').addEventListener('click', connect);
+$('dashRefresh').addEventListener('click', () => loadDashboard(true));
+// Load the dashboard the first time its pane is opened (and refresh on reopen).
+document.addEventListener('pane:show', (e) => { if (e.detail === 'dashboard') loadDashboard(true); });
 $('save').addEventListener('click', save);
 $('refresh').addEventListener('click', loadFromServer);
 $('refreshQueue').addEventListener('click', loadQueue);
@@ -325,6 +406,11 @@ $('sendReportNow').addEventListener('click', sendReportNow);
   const { token } = await getConfig();
   if (token) {
     await loadFromServer();
+    // If the dashboard is the restored active pane, load it now (its initial
+    // pane:show fired before this listener was attached).
+    let activePane = 'connection';
+    try { activePane = localStorage.getItem('ea-pane') || 'connection'; } catch { /* ignore */ }
+    if (activePane === 'dashboard') await loadDashboard(true);
   } else {
     $('reviewQueue').textContent = 'Connect to your backend to see draft comments.';
   }

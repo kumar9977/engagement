@@ -59,6 +59,21 @@ app.listen(port, () => {
     : (process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001');
   console.log(`LLM provider: ${provider} (model: ${model})`);
 
+  // Keep-warm: on Render's free tier the instance spins down after ~15 min of
+  // inactivity, and the next request pays a 50s+ cold start that shows up to
+  // users as a "timeout". Pinging our own public URL every few minutes resets
+  // that idle timer so the service stays warm during the day.
+  const selfUrl = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL;
+  if (selfUrl && String(process.env.KEEP_WARM || 'true') === 'true') {
+    const warmCron = process.env.KEEP_WARM_CRON || '*/10 * * * *'; // every 10 min
+    if (cron.validate(warmCron)) {
+      cron.schedule(warmCron, async () => {
+        try { await fetch(`${selfUrl.replace(/\/$/, '')}/api/health`); } catch { /* ignore */ }
+      });
+      console.log(`Keep-warm ping: ${warmCron} -> ${selfUrl}/api/health`);
+    }
+  }
+
   // Daily email report scheduler. Default 6pm server time; override with REPORT_CRON.
   const schedule = process.env.REPORT_CRON || '0 18 * * *';
   if (cron.validate(schedule)) {
