@@ -13,14 +13,12 @@ Engagement Assistant helps you write a thoughtful comment faster. When you are r
 
 ### Permission justifications
 
+(As of v1.2.1 the extension requests only the "storage" permission plus host
+access. The activeTab and scripting permissions were removed because they were
+not used — the content script is declared statically in the manifest.)
+
 **storage justification**
 Storage saves your own settings on your computer — your preferred tone, the topics you care about, and the login token that connects the extension to your account — so you do not have to type them again every time. It is never used to track you or to store anything from the pages you visit.
-
-**activeTab justification**
-activeTab is used only when you click our button. It lets the extension read the words of the post you are currently looking at, so the suggested comment actually fits that post. It does not read other tabs and does not run in the background.
-
-**scripting justification**
-scripting lets the extension do two small things on the page you are on: show a "Draft comment" button next to a post, and place the suggested comment into the comment box so you can read and edit it. Nothing is ever submitted automatically.
 
 **Host permission justification**
 The extension only works on LinkedIn and Instagram, because that is where you write these comments. It needs access to those two sites to read the post you choose and to put the suggested comment into the comment box on that page. It also connects to our own server (engagement-assistant-backend.onrender.com), which writes the suggestion using an AI model and keeps our API keys safe on the server, never in the browser. We are not affiliated with, endorsed by, or connected to LinkedIn or Instagram.

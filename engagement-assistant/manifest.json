@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Engagement Assistant",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Drafts post-specific comments for LinkedIn and Instagram in the comment box for you to review and post yourself.",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage"],
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://www.instagram.com/*",
