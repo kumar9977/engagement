@@ -12,32 +12,68 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Storage:
-//  - If TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set, use the Turso cloud
-//    database directly (remote mode). This is durable: it survives restarts and
-//    redeploys on hosts with an ephemeral filesystem (e.g. Render free), unlike
-//    a local file. Every query goes to Turso, so reads and writes are strongly
-//    consistent with no sync step.
-//  - Otherwise fall back to a local SQLite file (local dev / self-hosting).
-// libsql is a drop-in for better-sqlite3's synchronous API, so no other code
-// changes are needed.
+//  - If TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set, use a Turso EMBEDDED
+//    REPLICA: a local SQLite file that is kept in sync with the Turso cloud DB.
+//    Reads are served from the local file (fast and reliable — no per-query
+//    network call), while writes are applied locally and pushed to Turso on
+//    sync() so data stays durable across restarts/redeploys on ephemeral hosts.
+//    (Plain remote mode made every query a network round-trip, which showed up
+//    as intermittent "Service busy" / timeout errors under load.)
+//  - Otherwise fall back to a plain local SQLite file (local dev / self-hosting).
+// libsql keeps better-sqlite3's synchronous API, so no other code changes.
 const TURSO_URL = process.env.TURSO_DATABASE_URL;
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN;
+export const useTurso = Boolean(TURSO_URL && TURSO_TOKEN);
 
-export const db =
-  TURSO_URL && TURSO_TOKEN
-    ? new Database(TURSO_URL, { authToken: TURSO_TOKEN })
-    : (() => {
-        const dbPath = resolve(__dirname, '..', process.env.DB_PATH || './data/app.db');
-        mkdirSync(dirname(dbPath), { recursive: true });
-        const local = new Database(dbPath);
-        try { local.pragma('journal_mode = WAL'); } catch { /* ignore */ }
-        return local;
-      })();
+const localPath = resolve(
+  __dirname,
+  '..',
+  useTurso ? process.env.REPLICA_PATH || './data/replica.db' : process.env.DB_PATH || './data/app.db'
+);
+mkdirSync(dirname(localPath), { recursive: true });
 
-if (TURSO_URL && TURSO_TOKEN) console.log('[db] using Turso cloud database (durable)');
-else console.log('[db] using local SQLite file');
+export const db = useTurso
+  ? new Database(localPath, { syncUrl: TURSO_URL, authToken: TURSO_TOKEN })
+  : new Database(localPath);
 
-try { db.pragma('foreign_keys = ON'); } catch { /* remote libsql manages this itself */ }
+if (!useTurso) {
+  try { db.pragma('journal_mode = WAL'); } catch { /* ignore */ }
+}
+
+// Pull the full cloud dataset into the local replica before serving. Retry a
+// few times at boot; if it still fails, start anyway and let periodic sync
+// catch up (so the service comes up rather than crash-looping).
+if (useTurso) {
+  let synced = false;
+  for (let i = 0; i < 5 && !synced; i++) {
+    try {
+      await db.sync();
+      synced = true;
+    } catch (e) {
+      console.error(`[db] initial Turso sync failed (try ${i + 1}): ${e?.message}`);
+      await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+    }
+  }
+  console.log(synced ? '[db] Turso embedded replica synced (durable)' : '[db] starting before first sync; will retry');
+}
+
+// Push local writes to Turso (and pull any remote changes). Fire-and-forget.
+let syncing = false;
+export function syncNow() {
+  if (!useTurso || syncing) return;
+  syncing = true;
+  Promise.resolve()
+    .then(() => db.sync())
+    .catch((e) => console.error('[db] sync error:', e?.message))
+    .finally(() => { syncing = false; });
+}
+// Safety-net periodic sync for writes that don't call syncNow() themselves.
+if (useTurso) {
+  const ms = Number(process.env.SYNC_INTERVAL_MS || 15000);
+  setInterval(syncNow, ms).unref?.();
+}
+
+try { db.pragma('foreign_keys = ON'); } catch { /* ignore */ }
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -208,6 +244,7 @@ export function recordPayment({
   ).run(nowIso, endIso, nowIso, paymentId, subscriptionId, amount, user.id);
 
   ensureSettings(user.id);
+  syncNow();
   return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
 }
 
@@ -216,6 +253,7 @@ export function markSubscription(email, status) {
   const user = getUserByEmail(email);
   if (!user) return null;
   db.prepare('UPDATE users SET subscription_status = ? WHERE id = ?').run(status, user.id);
+  syncNow();
   return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
 }
 
@@ -243,6 +281,7 @@ export function adminSetSubscription({ email, startIso, endIso, amount = null })
      WHERE id = ?`
   ).run(startIso, endIso, new Date().toISOString(), amount, user.id);
   ensureSettings(user.id);
+  syncNow();
   return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
 }
 
@@ -266,6 +305,7 @@ export function adminRenew(email, months = 1, amount = null) {
        amount = COALESCE(?, amount)
      WHERE id = ?`
   ).run(new Date().toISOString(), end.toISOString(), new Date().toISOString(), amount, user.id);
+  syncNow();
   return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
 }
 
@@ -282,6 +322,7 @@ export function generateLicenseKey({ months = 1, note = null } = {}) {
   for (let i = 0; i < 5 && db.prepare('SELECT 1 FROM licenses WHERE key = ?').get(key); i++) key = randomKey();
   db.prepare('INSERT INTO licenses (key, status, months, note) VALUES (?, ?, ?, ?)')
     .run(key, 'active', m, (note || '').trim() || null);
+  syncNow();
   return db.prepare('SELECT * FROM licenses WHERE key = ?').get(key);
 }
 
@@ -343,6 +384,7 @@ export function adminRevoke(email) {
   db.prepare(
     `UPDATE users SET subscription_status = 'expired', current_period_end = ? WHERE id = ?`
   ).run(new Date().toISOString(), user.id);
+  syncNow();
   return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
 }
 

@@ -15,7 +15,7 @@ import webhookRoutes from './routes/webhook.js';
 import adminRoutes from './routes/admin.js';
 import legalRoutes from './routes/legal.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.3';
 
 // Don't let a single stray async error take the whole server (and therefore
 // every user) down. Log and keep serving instead of crashing.

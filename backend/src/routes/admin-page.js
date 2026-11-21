@@ -76,7 +76,9 @@ export function adminPage() {
   td.email{cursor:pointer;color:var(--accent);text-decoration:underline}
   /* modal */
   .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50}
-  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:100%;max-width:560px;padding:22px}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:100%;max-width:560px;padding:22px;max-height:calc(100vh - 80px);overflow:auto}
+  .info{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin:12px 0;font-size:13px}
+  .info .k{color:var(--muted)} .info .v{font-weight:600;word-break:break-all}
   .modal h2{margin:0 0 2px;font-size:18px}
   .modal .close{float:right;width:auto;margin:0;padding:4px 10px;background:transparent;color:var(--muted);border:1px solid var(--line)}
   .mini{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
@@ -164,12 +166,21 @@ export function adminPage() {
   <div id="overlay" class="overlay" hidden>
     <div class="modal">
       <button class="close" id="mClose" type="button">Close ✕</button>
-      <h2 id="mEmail">user</h2>
+      <h2 id="mEmail">User</h2>
       <p class="sub" id="mStatus"></p>
       <div class="mini">
         <div class="b"><div class="n" id="mPosted">0</div><div class="l">Comments posted</div></div>
         <div class="b"><div class="n" id="mDrafted">0</div><div class="l">Drafts made</div></div>
         <div class="b"><div class="n" id="mJoined">—</div><div class="l">Joined</div></div>
+      </div>
+      <div class="info">
+        <div class="k">Email</div><div class="v" id="iEmail">—</div>
+        <div class="k">Status</div><div class="v" id="iStatus">—</div>
+        <div class="k">Subscription start</div><div class="v" id="iStart">—</div>
+        <div class="k">Renews / expires</div><div class="v" id="iEnd">—</div>
+        <div class="k">Last payment</div><div class="v" id="iPaid">—</div>
+        <div class="k">Amount</div><div class="v" id="iAmount">—</div>
+        <div class="k">LinkedIn</div><div class="v" id="iLinkedin">—</div>
       </div>
       <h3 style="margin:6px 0 2px;font-size:14px">Edit subscription</h3>
       <div class="editrow">
@@ -312,27 +323,42 @@ function setDateDefaults(){
 let currentEmail=null;
 async function openUser(email){
   currentEmail=email;
+  // Open immediately with a loading state so it is always closable.
+  $('mEmail').textContent=email;
+  $('mStatus').textContent='Loading…';
+  $('mMsg').textContent=''; $('mMsg').className='formmsg';
+  $('mTrack').innerHTML='<div class="t muted">Loading…</div>';
+  $('overlay').hidden=false;
   try{
     const r=await fetch('/api/admin/user?email='+encodeURIComponent(email),{headers:{authorization:'Bearer '+token}});
     const d=await r.json();
-    if(!r.ok) throw new Error(d.error||'Failed');
-    $('mEmail').textContent=email;
-    const st=d.subscription||{};
+    if(!r.ok) throw new Error(d.error||'Failed to load');
+    const u=d.user||{}; const st=d.subscription||{};
     $('mStatus').innerHTML=badge(st)+' '+(st.currentPeriodEnd?('· until '+fmtDate(st.currentPeriodEnd)):'');
     $('mPosted').textContent=d.totalPosted||0;
     $('mDrafted').textContent=d.drafted||0;
-    $('mJoined').textContent=fmtDate(d.user.created_at);
-    $('mStart').value=d.user.subscription_start?d.user.subscription_start.slice(0,10):'';
-    $('mEnd').value=d.user.current_period_end?d.user.current_period_end.slice(0,10):'';
-    $('mAmount').value=(d.user.amount!=null)?d.user.amount:'';
-    $('mMsg').textContent=''; $('mMsg').className='formmsg';
+    $('mJoined').textContent=fmtDate(u.created_at);
+    // Full info
+    $('iEmail').textContent=u.email||'—';
+    $('iStatus').innerHTML=badge(st);
+    $('iStart').textContent=fmtDate(u.subscription_start);
+    $('iEnd').textContent=fmtDate(u.current_period_end);
+    $('iPaid').textContent=fmtDate(u.last_payment_at);
+    $('iAmount').textContent=fmtMoney(u.amount);
+    $('iLinkedin').textContent=u.linkedin_url||'—';
+    // Edit fields
+    $('mStart').value=u.subscription_start?u.subscription_start.slice(0,10):'';
+    $('mEnd').value=u.current_period_end?u.current_period_end.slice(0,10):'';
+    $('mAmount').value=(u.amount!=null)?u.amount:'';
     const max=Math.max(1,...(d.daily||[]).map(x=>x.count));
     $('mTrack').innerHTML=(d.daily||[]).map(x=>
       '<div class="t"><span>'+fmtDate(x.day)+'</span>'+
       '<span style="display:flex;align-items:center;gap:8px"><span class="bar" style="width:'+Math.round(90*x.count/max)+'px"></span><b>'+x.count+'</b></span></div>'
     ).join('') || '<div class="t muted">No comments yet.</div>';
-    $('overlay').hidden=false;
-  }catch(err){ alert(err.message); }
+  }catch(err){
+    $('mStatus').textContent='';
+    $('mTrack').innerHTML='<div class="t" style="color:var(--bad)">'+escapeHtml(err.message)+' — try again.</div>';
+  }
 }
 async function saveDetail(){
   try{
@@ -356,6 +382,7 @@ $('grantBtn').addEventListener('click',grant);
 $('mSave').addEventListener('click',saveDetail);
 $('mClose').addEventListener('click',closeModal);
 $('overlay').addEventListener('click',(e)=>{ if(e.target===$('overlay')) closeModal(); });
+document.addEventListener('keydown',(e)=>{ if(e.key==='Escape' && !$('overlay').hidden) closeModal(); });
 if(token) show();
 </script>
 </body>

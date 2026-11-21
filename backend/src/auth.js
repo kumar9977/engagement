@@ -2,7 +2,7 @@
 // token on every request. Minimal but real.
 
 import jwt from 'jsonwebtoken';
-import { db, getOrCreateUser, getUserByEmail, subscriptionState, dbRetry } from './db.js';
+import { db, getOrCreateUser, getUserByEmail, subscriptionState, dbRetry, syncNow } from './db.js';
 
 function secret() {
   const s = process.env.JWT_SECRET;
@@ -103,6 +103,7 @@ export function checkLicense({ key, email = null, linkedinUrl = null }) {
       ).run(now.toISOString(), end.toISOString(), now.toISOString(), Number(process.env.SUBSCRIPTION_AMOUNT || 790), user.id);
       db.prepare('UPDATE licenses SET redeemed_by_user_id = ?, redeemed_at = ?, user_id = ? WHERE key = ?')
         .run(user.id, now.toISOString(), user.id, trimmed);
+      syncNow();
     }
     const fresh = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
     return { token: issueToken(fresh), user: fresh };
