@@ -80,11 +80,19 @@ English
 ---
 
 ## TEST INSTRUCTIONS (for the reviewer)
+A working test account is required. Use the license key below.
 1. Install the extension and click its icon, then open "Settings & onboarding".
-2. In Settings, open the "Advanced / self-hosting" section, type any text in the "License key" box (for example: chrome-review-2026) and click "Connect with key". This signs you in to a test account.
+2. Open the "Activate your account" section. In the email box enter any email
+   (e.g. tester@example.com). Then open "Advanced / self-hosting", paste this
+   license key in the "License key" box, and click "Connect with key":
+       {{PASTE A LICENSE KEY YOU GENERATED AT /admin HERE}}
 3. Go to https://www.linkedin.com (or https://www.instagram.com) and open your feed.
 4. Under any post, a "Draft comment" button appears. Click it.
 5. After a moment, a suggested comment is placed in the comment box for you to read and edit. The reviewer can edit it or discard it. The extension does not post anything itself.
+
+(To create the key: open https://engagement-assistant-backend.onrender.com/admin,
+log in, click "Generate a license key", copy it, and paste it above. Generate a
+12-month key so it does not expire during review.)
 
 ---
 

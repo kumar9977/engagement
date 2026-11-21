@@ -1,0 +1,37 @@
+Engagement Assistant — How to install (2 minutes)
+
+You'll get a .zip file. Follow these steps:
+
+1. Save the .zip file somewhere you'll keep it (for example, your Desktop).
+
+2. UNZIP it:
+   - Windows: right-click the .zip > "Extract All..." > Extract.
+   - Mac: double-click the .zip.
+   You now have a FOLDER. Open it once and make sure you can see a file
+   called "manifest.json" inside. (Keep this folder — don't delete it.)
+
+3. Open Google Chrome and type this in the address bar, then press Enter:
+       chrome://extensions
+
+4. Turn ON "Developer mode" (switch in the top-right corner).
+
+5. Click "Load unpacked" (top-left).
+
+6. Select the FOLDER you unzipped in step 2 (the one with manifest.json inside),
+   then click "Select Folder".
+
+7. The "Engagement Assistant" extension now appears. Click its icon near the
+   Chrome address bar, open Settings, and sign in with your email.
+
+Done! Go to LinkedIn or Instagram. Under a post you'll see a "Draft comment"
+button — click it, a suggested comment appears in the box, edit if you like,
+and post it yourself.
+
+Notes:
+- Keep the unzipped folder where it is. If you delete or move it, the extension
+  stops working.
+- Chrome may show a message about "developer mode extensions" when you restart.
+  Just close it — this is normal for manually installed extensions.
+- When a new version is sent, repeat these steps with the new folder.
+
+Need help? Reply to the person who sent you this.

@@ -51,7 +51,14 @@ export function activateByEmail({ email, linkedinUrl = null }) {
   return { token: issueToken(user), user };
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 // Validates a license key, creates/links a user, returns { token, user }.
+//  - A duration key (generated in admin, has `months`) activates a bounded
+//    subscription on first redemption and is single-use, tied to the redeemer's
+//    email.
+//  - An unknown key is rejected, unless ALLOW_ANY_KEY=true (dev / self-hosting),
+//    which auto-provisions an unlimited "legacy" key.
 export function checkLicense({ key, email = null, linkedinUrl = null }) {
   if (!key || typeof key !== 'string' || key.trim().length < 4) {
     throw Object.assign(new Error('License key must be at least 4 characters'), { status: 400 });
@@ -59,17 +66,49 @@ export function checkLicense({ key, email = null, linkedinUrl = null }) {
   const trimmed = key.trim();
   let lic = db.prepare('SELECT * FROM licenses WHERE key = ?').get(trimmed);
 
-  // For a self-hosted single-user setup, auto-provision an active license the
-  // first time a key is seen. In a real SaaS you would seed licenses out of band
-  // and remove this block.
   if (!lic) {
-    db.prepare('INSERT INTO licenses (key, status) VALUES (?, ?)').run(trimmed, 'active');
-    lic = db.prepare('SELECT * FROM licenses WHERE key = ?').get(trimmed);
+    if (String(process.env.ALLOW_ANY_KEY || 'false') === 'true') {
+      db.prepare('INSERT INTO licenses (key, status) VALUES (?, ?)').run(trimmed, 'active');
+      lic = db.prepare('SELECT * FROM licenses WHERE key = ?').get(trimmed);
+    } else {
+      throw Object.assign(new Error('Invalid license key'), { status: 403 });
+    }
   }
   if (lic.status !== 'active') {
-    throw Object.assign(new Error('License is not active'), { status: 403 });
+    throw Object.assign(new Error('This license key is not active'), { status: 403 });
   }
 
+  // Duration key: activates a month (or N months) and is single-use.
+  if (lic.months != null) {
+    const clean = (email || '').trim().toLowerCase();
+    if (!EMAIL_RE.test(clean)) {
+      throw Object.assign(new Error('Enter your email to activate this license key'), { status: 400 });
+    }
+    const user = getOrCreateUser({ email: clean, linkedinUrl });
+    if (lic.redeemed_by_user_id && lic.redeemed_by_user_id !== user.id) {
+      throw Object.assign(new Error('This license key has already been used by another account'), { status: 409 });
+    }
+    if (!lic.redeemed_by_user_id) {
+      const now = new Date();
+      const end = new Date(now);
+      end.setMonth(end.getMonth() + lic.months);
+      db.prepare(
+        `UPDATE users SET
+           subscription_status = 'active',
+           subscription_start = COALESCE(subscription_start, ?),
+           current_period_end = ?,
+           last_payment_at = ?,
+           amount = COALESCE(amount, ?)
+         WHERE id = ?`
+      ).run(now.toISOString(), end.toISOString(), now.toISOString(), Number(process.env.SUBSCRIPTION_AMOUNT || 790), user.id);
+      db.prepare('UPDATE licenses SET redeemed_by_user_id = ?, redeemed_at = ?, user_id = ? WHERE key = ?')
+        .run(user.id, now.toISOString(), user.id, trimmed);
+    }
+    const fresh = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+    return { token: issueToken(fresh), user: fresh };
+  }
+
+  // Legacy / unlimited key.
   const user = getOrCreateUser({ email, linkedinUrl });
   if (!lic.user_id) {
     db.prepare('UPDATE licenses SET user_id = ? WHERE key = ?').run(user.id, trimmed);

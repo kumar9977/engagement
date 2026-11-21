@@ -4,6 +4,7 @@
 //  every comment themselves, so there is no scheduler state to persist.)
 
 import Database from 'libsql';
+import crypto from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -102,6 +103,14 @@ addColumnIfMissing('users', 'subscription_id', 'TEXT');              // Razorpay
 addColumnIfMissing('users', 'amount', 'INTEGER');                    // last amount in rupees
 addColumnIfMissing('users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0');
 
+// License-key fields: duration keys activate a bounded subscription when a
+// customer redeems them (used for UPI / manual payers). A NULL `months` means a
+// legacy unlimited key.
+addColumnIfMissing('licenses', 'months', 'INTEGER');                 // length in months (NULL = unlimited/legacy)
+addColumnIfMissing('licenses', 'redeemed_by_user_id', 'INTEGER');    // who redeemed it
+addColumnIfMissing('licenses', 'redeemed_at', 'TEXT');               // when
+addColumnIfMissing('licenses', 'note', 'TEXT');                      // owner's label (e.g. who it's for)
+
 // --- Helpers ---------------------------------------------------------------
 
 export function getOrCreateUser({ email = null, linkedinUrl = null } = {}) {
@@ -191,6 +200,99 @@ export function markSubscription(email, status) {
   const user = getUserByEmail(email);
   if (!user) return null;
   db.prepare('UPDATE users SET subscription_status = ? WHERE id = ?').run(status, user.id);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Admin: manually create or update a user's subscription window (for UPI / manual
+// payers who have no auto-pay). startIso and endIso are ISO date-times.
+export function adminSetSubscription({ email, startIso, endIso, amount = null }) {
+  const clean = (email || '').trim().toLowerCase();
+  if (!EMAIL_RE.test(clean)) throw Object.assign(new Error('Enter a valid email address'), { status: 400 });
+  if (!startIso || !endIso || Number.isNaN(Date.parse(startIso)) || Number.isNaN(Date.parse(endIso))) {
+    throw Object.assign(new Error('Start and end dates are required'), { status: 400 });
+  }
+  if (Date.parse(endIso) <= Date.parse(startIso)) {
+    throw Object.assign(new Error('End date must be after the start date'), { status: 400 });
+  }
+  const user = getOrCreateUser({ email: clean });
+  db.prepare(
+    `UPDATE users SET
+       subscription_status = 'active',
+       subscription_start = ?,
+       current_period_end = ?,
+       last_payment_at = ?,
+       amount = COALESCE(?, amount)
+     WHERE id = ?`
+  ).run(startIso, endIso, new Date().toISOString(), amount, user.id);
+  ensureSettings(user.id);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+}
+
+// Admin: extend a user's access by N months from the later of now / their
+// current end date (an early renewal keeps the unused days).
+export function adminRenew(email, months = 1, amount = null) {
+  const clean = (email || '').trim().toLowerCase();
+  const user = getUserByEmail(clean);
+  if (!user) throw Object.assign(new Error('No user with that email. Add them first.'), { status: 404 });
+  const now = Date.now();
+  const existingEnd = user.current_period_end ? Date.parse(user.current_period_end) : NaN;
+  const base = new Date(Number.isFinite(existingEnd) && existingEnd > now ? existingEnd : now);
+  const end = new Date(base);
+  end.setMonth(end.getMonth() + Math.max(1, Number(months) || 1));
+  db.prepare(
+    `UPDATE users SET
+       subscription_status = 'active',
+       subscription_start = COALESCE(subscription_start, ?),
+       current_period_end = ?,
+       last_payment_at = ?,
+       amount = COALESCE(?, amount)
+     WHERE id = ?`
+  ).run(new Date().toISOString(), end.toISOString(), new Date().toISOString(), amount, user.id);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+}
+
+// Admin: generate a new license key that activates for `months` when a customer
+// redeems it in the extension. `note` is an optional label (e.g. the buyer).
+function randomKey() {
+  const raw = crypto.randomBytes(12).toString('base64').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  const s = (raw + 'ABCDEFGHJKMNPQRSTUVWXYZ23456789').slice(0, 12);
+  return `EA-${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}`;
+}
+export function generateLicenseKey({ months = 1, note = null } = {}) {
+  const m = Math.max(1, Math.min(24, Number(months) || 1));
+  let key = randomKey();
+  for (let i = 0; i < 5 && db.prepare('SELECT 1 FROM licenses WHERE key = ?').get(key); i++) key = randomKey();
+  db.prepare('INSERT INTO licenses (key, status, months, note) VALUES (?, ?, ?, ?)')
+    .run(key, 'active', m, (note || '').trim() || null);
+  return db.prepare('SELECT * FROM licenses WHERE key = ?').get(key);
+}
+
+export function listLicenses() {
+  return db
+    .prepare(
+      `SELECT l.key, l.status, l.months, l.note, l.created_at, l.redeemed_at,
+              u.email AS redeemed_email,
+              ru.current_period_end AS redeemer_end
+         FROM licenses l
+         LEFT JOIN users u  ON u.id  = l.redeemed_by_user_id
+         LEFT JOIN users ru ON ru.id = l.redeemed_by_user_id
+        WHERE l.months IS NOT NULL
+        ORDER BY l.created_at DESC
+        LIMIT 200`
+    )
+    .all();
+}
+
+// Admin: end a user's access immediately.
+export function adminRevoke(email) {
+  const clean = (email || '').trim().toLowerCase();
+  const user = getUserByEmail(clean);
+  if (!user) throw Object.assign(new Error('No user with that email'), { status: 404 });
+  db.prepare(
+    `UPDATE users SET subscription_status = 'expired', current_period_end = ? WHERE id = ?`
+  ).run(new Date().toISOString(), user.id);
   return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
 }
 

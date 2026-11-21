@@ -53,6 +53,26 @@ export function adminPage() {
   .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;gap:12px}
   .topbar button{width:auto;margin:0;padding:8px 14px;background:transparent;color:var(--accent);border:1px solid var(--line)}
   .muted{color:var(--muted)}
+  /* management cards */
+  .mgmt{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}
+  @media (max-width:760px){.mgmt{grid-template-columns:1fr}}
+  .cardh{margin:0 0 4px;font-size:15px}
+  .hint{color:var(--muted);font-size:12.5px;margin:0 0 12px}
+  .formrow{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-bottom:8px}
+  .formrow label{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+  .formrow input{width:100%;margin-top:0;padding:8px 10px}
+  .formrow button{width:auto;margin:0;padding:9px 16px}
+  .formmsg{font-size:13px;font-weight:600;min-height:16px}
+  .formmsg.ok{color:var(--ok)} .formmsg.err{color:var(--bad)}
+  .keyout{margin:6px 0;padding:10px 12px;border:1px dashed var(--accent);border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .keyout code{font-size:15px;font-weight:700;letter-spacing:.04em}
+  .keyout button{width:auto;margin:0;padding:6px 12px}
+  .keylist{margin-top:8px;max-height:150px;overflow:auto;font-size:12.5px}
+  .keylist .krow{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid var(--line)}
+  .keylist code{font-weight:600}
+  td.act{white-space:nowrap}
+  td.act button{width:auto;margin:0 4px 0 0;padding:5px 10px;font-size:12px;background:transparent;color:var(--accent);border:1px solid var(--line)}
+  td.act button.danger{color:var(--bad);border-color:var(--bad)}
 </style>
 </head>
 <body>
@@ -81,11 +101,42 @@ export function adminPage() {
       </div>
     </div>
     <div class="stats" id="stats"></div>
+
+    <div class="mgmt">
+      <!-- Generate a license key -->
+      <div class="card">
+        <h3 class="cardh">Generate a license key</h3>
+        <p class="hint">Create a key, send it to a UPI/manual buyer. When they paste it in the extension (Settings → Advanced) with their email, it activates for the chosen number of months.</p>
+        <div class="formrow">
+          <label>Months <input id="keyMonths" type="number" min="1" max="24" value="1" style="width:70px"></label>
+          <label style="flex:1">Note (optional) <input id="keyNote" type="text" placeholder="e.g. Ravi — paid via UPI 21 Nov"></label>
+          <button id="genKey" type="button">Generate key</button>
+        </div>
+        <div id="keyOut" class="keyout" hidden></div>
+        <div id="keyList" class="keylist"></div>
+      </div>
+
+      <!-- Add / renew by email -->
+      <div class="card">
+        <h3 class="cardh">Add or renew by email</h3>
+        <p class="hint">Set a user's access window directly. Start defaults to today, end to one month later.</p>
+        <div class="formrow">
+          <label style="flex:1">Email <input id="grantEmail" type="email" placeholder="buyer@email.com"></label>
+        </div>
+        <div class="formrow">
+          <label>Start <input id="grantStart" type="date"></label>
+          <label>End <input id="grantEnd" type="date"></label>
+          <button id="grantBtn" type="button">Save</button>
+        </div>
+        <div id="grantMsg" class="formmsg"></div>
+      </div>
+    </div>
+
     <div class="tablewrap">
       <table>
         <thead><tr>
           <th>Email</th><th>Status</th><th>Start date</th><th>Renews / expires</th>
-          <th>Last payment</th><th>Amount</th><th>Comments</th><th>Joined</th>
+          <th>Last payment</th><th>Amount</th><th>Comments</th><th>Joined</th><th>Actions</th>
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
@@ -138,8 +189,12 @@ async function load(){
 
   $('rows').innerHTML=(d.users||[]).map(u=>{
     const st=u.state||{};
+    const em=u.email?escapeHtml(u.email):'';
+    const actions = em
+      ? '<td class="act"><button data-renew="'+em+'">Renew +1m</button><button class="danger" data-revoke="'+em+'">Revoke</button></td>'
+      : '<td class="act muted">—</td>';
     return '<tr>'+
-      '<td class="email">'+(u.email?escapeHtml(u.email):'<span class="muted">no email</span>')+'</td>'+
+      '<td class="email">'+(em||'<span class="muted">no email</span>')+'</td>'+
       '<td>'+badge(st)+'</td>'+
       '<td>'+fmtDate(u.subscription_start)+'</td>'+
       '<td>'+fmtDate(u.current_period_end)+'</td>'+
@@ -147,20 +202,81 @@ async function load(){
       '<td>'+fmtMoney(u.amount)+'</td>'+
       '<td>'+(u.posted_count||0)+'</td>'+
       '<td>'+fmtDate(u.created_at)+'</td>'+
+      actions+
     '</tr>';
-  }).join('') || '<tr><td colspan="8" class="muted" style="padding:22px;text-align:center">No users yet.</td></tr>';
+  }).join('') || '<tr><td colspan="9" class="muted" style="padding:22px;text-align:center">No users yet.</td></tr>';
+
+  $('rows').querySelectorAll('[data-renew]').forEach(b=>b.addEventListener('click',()=>userAction('/api/admin/renew',{email:b.dataset.renew,months:1},'Renewed +1 month')));
+  $('rows').querySelectorAll('[data-revoke]').forEach(b=>b.addEventListener('click',()=>{ if(confirm('End access for '+b.dataset.revoke+' now?')) userAction('/api/admin/revoke',{email:b.dataset.revoke},'Access ended'); }));
 
   $('asof').textContent='Updated '+new Date().toLocaleString();
 }
 
+async function post(url,body){
+  const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+token},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
+  return d;
+}
+
+async function userAction(url,body,okMsg){
+  try{ await post(url,body); await load(); await loadKeys(); }
+  catch(err){ alert(err.message); }
+}
+
+async function genKey(){
+  const btn=$('genKey'); btn.disabled=true;
+  try{
+    const d=await post('/api/admin/keys',{months:parseInt($('keyMonths').value,10)||1, note:$('keyNote').value});
+    const out=$('keyOut'); out.hidden=false;
+    out.innerHTML='<code id="theKey">'+escapeHtml(d.key)+'</code><button id="copyKey" type="button">Copy</button>';
+    $('copyKey').addEventListener('click',()=>{ navigator.clipboard.writeText(d.key).then(()=>{$('copyKey').textContent='Copied';}); });
+    $('keyNote').value='';
+    await loadKeys();
+  }catch(err){ alert(err.message); }
+  finally{ btn.disabled=false; }
+}
+
+async function loadKeys(){
+  try{
+    const r=await fetch('/api/admin/keys',{headers:{authorization:'Bearer '+token}});
+    if(!r.ok) return;
+    const d=await r.json();
+    $('keyList').innerHTML=(d.keys||[]).map(k=>{
+      const used=k.redeemed_email?('used by '+escapeHtml(k.redeemed_email)):'<span style="color:var(--ok)">unused</span>';
+      const note=k.note?(' · '+escapeHtml(k.note)):'';
+      return '<div class="krow"><code>'+escapeHtml(k.key)+'</code><span class="muted">'+k.months+'m · '+used+note+'</span></div>';
+    }).join('') || '<p class="muted">No keys yet.</p>';
+  }catch(e){/*ignore*/}
+}
+
+async function grant(){
+  $('grantMsg').textContent=''; $('grantMsg').className='formmsg';
+  try{
+    const d=await post('/api/admin/grant',{email:$('grantEmail').value.trim(),start:$('grantStart').value,end:$('grantEnd').value});
+    $('grantMsg').textContent='Saved — active until '+fmtDate(d.subscription.currentPeriodEnd); $('grantMsg').className='formmsg ok';
+    $('grantEmail').value='';
+    await load();
+  }catch(err){ $('grantMsg').textContent=err.message; $('grantMsg').className='formmsg err'; }
+}
+
+function iso(d){ return d.toISOString().slice(0,10); }
+function setDateDefaults(){
+  const today=new Date(); const next=new Date(); next.setMonth(next.getMonth()+1);
+  if(!$('grantStart').value) $('grantStart').value=iso(today);
+  if(!$('grantEnd').value) $('grantEnd').value=iso(next);
+}
+
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
-function show(){ $('login').hidden=true; $('dash').hidden=false; load(); }
+function show(){ $('login').hidden=true; $('dash').hidden=false; setDateDefaults(); load(); loadKeys(); }
 function logout(){ token=null; sessionStorage.removeItem(KEY); $('dash').hidden=true; $('login').hidden=false; }
 
 $('loginForm').addEventListener('submit',login);
-$('refresh').addEventListener('click',load);
+$('refresh').addEventListener('click',()=>{load();loadKeys();});
 $('logout').addEventListener('click',logout);
+$('genKey').addEventListener('click',genKey);
+$('grantBtn').addEventListener('click',grant);
 if(token) show();
 </script>
 </body>
