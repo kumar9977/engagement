@@ -20,6 +20,7 @@ export function adminPage() {
       --accent:#8b93ff; --okbg:#16351f; --ok:#4ade80; --warnbg:#3a2e12; --warn:#fbbf24; --badbg:#3a1618; --bad:#f87171; }
   }
   *{box-sizing:border-box}
+  [hidden]{display:none !important}
   body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
   .wrap{max-width:1060px;margin:0 auto;padding:28px 20px 60px}
   h1{font-size:20px;margin:0 0 2px;letter-spacing:-.01em}
