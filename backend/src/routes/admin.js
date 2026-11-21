@@ -13,6 +13,7 @@ import {
   generateLicenseKey,
   listLicenses,
   subscriptionState,
+  getUserDetail,
 } from '../db.js';
 import { adminPage } from './admin-page.js';
 
@@ -46,12 +47,24 @@ router.post('/api/admin/login', (req, res) => {
 // Manually set a user's subscription window (for UPI / manual payers).
 router.post('/api/admin/grant', requireAdmin, (req, res, next) => {
   try {
-    const { email, start, end } = req.body || {};
+    const { email, start, end, amount } = req.body || {};
     if (!start || !end) return res.status(400).json({ error: 'Start and end dates are required' });
     const startIso = `${start}T00:00:00.000Z`;
     const endIso = `${end}T23:59:59.999Z`;
-    const user = adminSetSubscription({ email, startIso, endIso });
+    const amt = amount === '' || amount == null ? null : Number(amount);
+    const user = adminSetSubscription({ email, startIso, endIso, amount: Number.isFinite(amt) ? amt : null });
     res.json({ ok: true, user: { email: user.email }, subscription: subscriptionState(user) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/user?email=... -> one user's profile + per-day tracker.
+router.get('/api/admin/user', requireAdmin, (req, res, next) => {
+  try {
+    const detail = getUserDetail(req.query.email);
+    if (!detail) return res.status(404).json({ error: 'User not found' });
+    res.json(detail);
   } catch (err) {
     next(err);
   }

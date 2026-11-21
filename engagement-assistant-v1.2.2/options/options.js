@@ -84,11 +84,15 @@ async function subscribe() {
 async function activate() {
   const apiBase = $('apiBase').value.trim() || DEFAULTS.apiBase;
   const email = $('email').value.trim();
+  const key = $('actLicense').value.trim();
   const linkedinUrl = $('linkedinUrl').value.trim() || null;
-  if (!email) return msg($('activateMsg'), 'Enter the email you paid with.', false);
+  if (!email) return msg($('activateMsg'), 'Enter your email.', false);
 
-  await setStore({ apiBase, email });
-  const res = await api('/activate', { method: 'POST', auth: false, body: { email, linkedinUrl } });
+  await setStore({ apiBase, email, license: key || undefined });
+  // With a license key, redeem it; otherwise activate by email (online payers).
+  const res = key
+    ? await api('/license-check', { method: 'POST', auth: false, body: { key, email, linkedinUrl } })
+    : await api('/activate', { method: 'POST', auth: false, body: { email, linkedinUrl } });
   if (!res.ok) return msg($('activateMsg'), res.error || 'Could not activate.', false);
 
   await setStore({ token: res.data.token, profile: res.data.user });

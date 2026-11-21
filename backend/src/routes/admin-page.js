@@ -73,6 +73,23 @@ export function adminPage() {
   td.act{white-space:nowrap}
   td.act button{width:auto;margin:0 4px 0 0;padding:5px 10px;font-size:12px;background:transparent;color:var(--accent);border:1px solid var(--line)}
   td.act button.danger{color:var(--bad);border-color:var(--bad)}
+  td.email{cursor:pointer;color:var(--accent);text-decoration:underline}
+  /* modal */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:100%;max-width:560px;padding:22px}
+  .modal h2{margin:0 0 2px;font-size:18px}
+  .modal .close{float:right;width:auto;margin:0;padding:4px 10px;background:transparent;color:var(--muted);border:1px solid var(--line)}
+  .mini{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
+  .mini .b{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .mini .b .n{font-size:20px;font-weight:800} .mini .b .l{font-size:11px;color:var(--muted)}
+  .editrow{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:10px 0}
+  .editrow label{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+  .editrow input{margin-top:0;padding:8px 10px}
+  .editrow button{width:auto;margin:0;padding:9px 16px}
+  .track{max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  .track .t{display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid var(--line);font-size:13px}
+  .track .t:last-child{border-bottom:none}
+  .track .bar{height:7px;background:var(--accent);border-radius:4px;min-width:6px}
 </style>
 </head>
 <body>
@@ -142,6 +159,30 @@ export function adminPage() {
       </table>
     </div>
   </div>
+
+  <!-- USER DETAIL MODAL -->
+  <div id="overlay" class="overlay" hidden>
+    <div class="modal">
+      <button class="close" id="mClose" type="button">Close ✕</button>
+      <h2 id="mEmail">user</h2>
+      <p class="sub" id="mStatus"></p>
+      <div class="mini">
+        <div class="b"><div class="n" id="mPosted">0</div><div class="l">Comments posted</div></div>
+        <div class="b"><div class="n" id="mDrafted">0</div><div class="l">Drafts made</div></div>
+        <div class="b"><div class="n" id="mJoined">—</div><div class="l">Joined</div></div>
+      </div>
+      <h3 style="margin:6px 0 2px;font-size:14px">Edit subscription</h3>
+      <div class="editrow">
+        <label>Start <input id="mStart" type="date"></label>
+        <label>End <input id="mEnd" type="date"></label>
+        <label>Amount (₹) <input id="mAmount" type="number" min="0" style="width:100px"></label>
+        <button id="mSave" type="button">Save</button>
+      </div>
+      <div id="mMsg" class="formmsg"></div>
+      <h3 style="margin:14px 0 6px;font-size:14px">Daily comment tracker</h3>
+      <div class="track" id="mTrack"></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -194,7 +235,7 @@ async function load(){
       ? '<td class="act"><button data-renew="'+em+'">Renew +1m</button><button class="danger" data-revoke="'+em+'">Revoke</button></td>'
       : '<td class="act muted">—</td>';
     return '<tr>'+
-      '<td class="email">'+(em||'<span class="muted">no email</span>')+'</td>'+
+      '<td class="email"'+(em?' data-open="'+em+'"':'')+'>'+(em||'<span class="muted" style="text-decoration:none;cursor:default">no email</span>')+'</td>'+
       '<td>'+badge(st)+'</td>'+
       '<td>'+fmtDate(u.subscription_start)+'</td>'+
       '<td>'+fmtDate(u.current_period_end)+'</td>'+
@@ -208,6 +249,7 @@ async function load(){
 
   $('rows').querySelectorAll('[data-renew]').forEach(b=>b.addEventListener('click',()=>userAction('/api/admin/renew',{email:b.dataset.renew,months:1},'Renewed +1 month')));
   $('rows').querySelectorAll('[data-revoke]').forEach(b=>b.addEventListener('click',()=>{ if(confirm('End access for '+b.dataset.revoke+' now?')) userAction('/api/admin/revoke',{email:b.dataset.revoke},'Access ended'); }));
+  $('rows').querySelectorAll('[data-open]').forEach(td=>td.addEventListener('click',()=>openUser(td.dataset.open)));
 
   $('asof').textContent='Updated '+new Date().toLocaleString();
 }
@@ -267,6 +309,40 @@ function setDateDefaults(){
   if(!$('grantEnd').value) $('grantEnd').value=iso(next);
 }
 
+let currentEmail=null;
+async function openUser(email){
+  currentEmail=email;
+  try{
+    const r=await fetch('/api/admin/user?email='+encodeURIComponent(email),{headers:{authorization:'Bearer '+token}});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||'Failed');
+    $('mEmail').textContent=email;
+    const st=d.subscription||{};
+    $('mStatus').innerHTML=badge(st)+' '+(st.currentPeriodEnd?('· until '+fmtDate(st.currentPeriodEnd)):'');
+    $('mPosted').textContent=d.totalPosted||0;
+    $('mDrafted').textContent=d.drafted||0;
+    $('mJoined').textContent=fmtDate(d.user.created_at);
+    $('mStart').value=d.user.subscription_start?d.user.subscription_start.slice(0,10):'';
+    $('mEnd').value=d.user.current_period_end?d.user.current_period_end.slice(0,10):'';
+    $('mAmount').value=(d.user.amount!=null)?d.user.amount:'';
+    $('mMsg').textContent=''; $('mMsg').className='formmsg';
+    const max=Math.max(1,...(d.daily||[]).map(x=>x.count));
+    $('mTrack').innerHTML=(d.daily||[]).map(x=>
+      '<div class="t"><span>'+fmtDate(x.day)+'</span>'+
+      '<span style="display:flex;align-items:center;gap:8px"><span class="bar" style="width:'+Math.round(90*x.count/max)+'px"></span><b>'+x.count+'</b></span></div>'
+    ).join('') || '<div class="t muted">No comments yet.</div>';
+    $('overlay').hidden=false;
+  }catch(err){ alert(err.message); }
+}
+async function saveDetail(){
+  try{
+    const d=await post('/api/admin/grant',{email:currentEmail,start:$('mStart').value,end:$('mEnd').value,amount:$('mAmount').value});
+    $('mMsg').textContent='Saved — active until '+fmtDate(d.subscription.currentPeriodEnd); $('mMsg').className='formmsg ok';
+    await load();
+  }catch(err){ $('mMsg').textContent=err.message; $('mMsg').className='formmsg err'; }
+}
+function closeModal(){ $('overlay').hidden=true; currentEmail=null; }
+
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
 function show(){ $('login').hidden=true; $('dash').hidden=false; setDateDefaults(); load(); loadKeys(); }
@@ -277,6 +353,9 @@ $('refresh').addEventListener('click',()=>{load();loadKeys();});
 $('logout').addEventListener('click',logout);
 $('genKey').addEventListener('click',genKey);
 $('grantBtn').addEventListener('click',grant);
+$('mSave').addEventListener('click',saveDetail);
+$('mClose').addEventListener('click',closeModal);
+$('overlay').addEventListener('click',(e)=>{ if(e.target===$('overlay')) closeModal(); });
 if(token) show();
 </script>
 </body>

@@ -163,14 +163,20 @@ async function subscribe() {
 
 async function activate() {
   const email = $('activateEmail').value.trim();
+  const key = $('activateKey').value.trim();
   if (!email) return msg($('activateMsg'), 'Enter your email first.', false);
   $('activate').disabled = true;
   msg($('activateMsg'), 'Checking…', true);
-  const res = await api('/activate', { method: 'POST', auth: false, body: { email } });
+
+  // With a license key, redeem it; otherwise activate by email (Razorpay payers).
+  const res = key
+    ? await api('/license-check', { method: 'POST', auth: false, body: { key, email } })
+    : await api('/activate', { method: 'POST', auth: false, body: { email } });
+
   $('activate').disabled = false;
   if (!res.ok) return msg($('activateMsg'), res.error || 'Could not activate.', false);
 
-  await setStore({ token: res.data.token, profile: res.data.user, email });
+  await setStore({ token: res.data.token, profile: res.data.user, email, license: key || undefined });
   msg($('activateMsg'), 'Activated!', true);
   await render();
 }
@@ -182,9 +188,10 @@ async function render() {
   const health = await api('/health', { auth: false });
   setDot(health.ok, health.ok ? `Connected to ${apiBase}` : health.error || 'Backend unreachable');
 
-  // Prefill the activation email if we have one stored.
-  const { email } = await getStore(['email']);
+  // Prefill the activation email / key if we have them stored.
+  const { email, license } = await getStore(['email', 'license']);
   if (email && $('activateEmail')) $('activateEmail').value = email;
+  if (license && $('activateKey')) $('activateKey').value = license;
 
   if (!token) return showGate(null);
 

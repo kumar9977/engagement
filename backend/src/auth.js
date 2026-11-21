@@ -2,7 +2,7 @@
 // token on every request. Minimal but real.
 
 import jwt from 'jsonwebtoken';
-import { db, getOrCreateUser, getUserByEmail, subscriptionState } from './db.js';
+import { db, getOrCreateUser, getUserByEmail, subscriptionState, dbRetry } from './db.js';
 
 function secret() {
   const s = process.env.JWT_SECRET;
@@ -119,23 +119,34 @@ export function checkLicense({ key, email = null, linkedinUrl = null }) {
 // Verifies the Bearer token and loads the user. Does NOT check subscription.
 // Attaches req.userId and req.user. Used by status endpoints (/me) that must
 // stay readable even when a subscription has lapsed.
-export function requireAuthToken(req, res, next) {
+export async function requireAuthToken(req, res, next) {
   const header = req.get('authorization') || '';
   const m = header.match(/^Bearer\s+(.+)$/i);
   if (!m) return res.status(401).json({ error: 'Missing bearer token' });
+
+  // Verify the token itself first. A failure here is a genuine auth problem.
+  let payload;
   try {
-    const payload = jwt.verify(m[1], secret());
-    // The token may reference a user that no longer exists (e.g. the DB was
-    // reset). Return 401 so the client can transparently re-authenticate,
-    // instead of letting a later insert fail with a foreign-key error.
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.uid);
-    if (!user) return res.status(401).json({ error: 'Session expired, please reconnect' });
-    req.userId = payload.uid;
-    req.user = user;
-    next();
+    payload = jwt.verify(m[1], secret());
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+
+  // Load the user separately, with retry. A DB hiccup (common in remote mode)
+  // must NOT be reported as an auth error — that was showing users a false
+  // "Invalid or expired token" banner. Retry, and only on sustained failure
+  // return 503 (transient) so the client can retry instead of logging out.
+  let user;
+  try {
+    user = await dbRetry(() => db.prepare('SELECT * FROM users WHERE id = ?').get(payload.uid));
+  } catch {
+    return res.status(503).json({ error: 'Service busy, please try again.' });
+  }
+  if (!user) return res.status(401).json({ error: 'Session expired, please reconnect' });
+
+  req.userId = payload.uid;
+  req.user = user;
+  next();
 }
 
 // Full gate: valid token AND an active subscription (manual accounts pass).

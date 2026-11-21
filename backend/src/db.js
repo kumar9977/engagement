@@ -130,6 +130,22 @@ export function getUserByEmail(email) {
   return db.prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE').get(email) || null;
 }
 
+// Retry a synchronous DB operation a few times on a transient error. In Turso
+// remote mode every query is a network call, so an occasional blip should be
+// retried rather than surfaced to the user as a hard error.
+export async function dbRetry(fn, tries = 4) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return fn();
+    } catch (e) {
+      lastErr = e;
+      await new Promise((r) => setTimeout(r, 60 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 // Derives whether a user currently has access.
 //   - A user who never paid (no subscription_start) is treated as a manual /
 //     comp account and is always allowed (grandfathered).
@@ -283,6 +299,40 @@ export function listLicenses() {
         LIMIT 200`
     )
     .all();
+}
+
+// Admin: full detail for one user — profile, subscription, and a per-day
+// comment tracker (last 60 days) with the total.
+export function getUserDetail(email) {
+  const user = getUserByEmail(email);
+  if (!user) return null;
+  const daily = db
+    .prepare(
+      `SELECT date(created_at) AS day, COUNT(*) AS count
+         FROM engagement_log
+        WHERE user_id = ? AND status = 'posted'
+        GROUP BY day ORDER BY day DESC LIMIT 60`
+    )
+    .all(user.id);
+  const totalPosted = daily.reduce((n, d) => n + (d.count || 0), 0);
+  const drafted = db
+    .prepare(`SELECT COUNT(*) AS c FROM engagement_log WHERE user_id = ? AND status = 'drafted'`)
+    .get(user.id).c;
+  return {
+    user: {
+      email: user.email,
+      linkedin_url: user.linkedin_url,
+      created_at: user.created_at,
+      subscription_start: user.subscription_start,
+      current_period_end: user.current_period_end,
+      amount: user.amount,
+      last_payment_at: user.last_payment_at,
+    },
+    subscription: subscriptionState(user),
+    daily,
+    totalPosted,
+    drafted,
+  };
 }
 
 // Admin: end a user's access immediately.
