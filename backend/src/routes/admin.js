@@ -28,7 +28,9 @@ function passwordOk(input) {
 }
 
 // The dashboard page (static HTML; it logs in via the API below).
+// No-cache so browsers never serve a stale version after a deploy.
 router.get('/admin', (_req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.type('html').send(adminPage());
 });
 
